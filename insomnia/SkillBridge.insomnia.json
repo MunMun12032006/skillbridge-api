@@ -1,0 +1,277 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-10-23T00:00:00.000Z",
+  "__export_source": "skillbridge.praktikum",
+  "resources": [
+    {
+      "_id": "wrk_skillbridge",
+      "_type": "workspace",
+      "parentId": null,
+      "name": "SkillBridge API",
+      "description": "Koleksi praktikum SkillBridge (FastAPI)",
+      "scope": "collection"
+    },
+    {
+      "_id": "env_sb_base",
+      "_type": "environment",
+      "parentId": "wrk_skillbridge",
+      "name": "Base Environment",
+      "data": {
+        "base_url": "http://localhost:8000",
+        "token": "",
+        "course_id": "",
+        "module_id": "",
+        "enrollment_id": "",
+        "invoice_id": "",
+        "external_ref": ""
+      }
+    },
+    {
+      "_id": "req_sb_01",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "01 Register",
+      "method": "POST",
+      "url": "{{ _.base_url }}/auth/register",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": 100,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"full_name\": \"Budi Santoso\",\n  \"email\": \"budi@mail.com\",\n  \"password\": \"Rahasia123\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_02",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "02 Login (salin data.access_token ke env token)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/auth/login",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": 200,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"email\": \"budi@mail.com\",\n  \"password\": \"Rahasia123\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_03",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "03 Get Courses (salin id ke env course_id)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/courses",
+      "headers": [],
+      "authentication": {},
+      "metaSortKey": 300
+    },
+    {
+      "_id": "req_sb_04",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "04 Get Course Detail (salin 1 module id ke env module_id)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/courses/{{ _.course_id }}",
+      "headers": [],
+      "authentication": {},
+      "metaSortKey": 400
+    },
+    {
+      "_id": "req_sb_05",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "05 Create Enrollment (salin enrollment.id & invoice.id)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/enrollments",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.token }}"
+      },
+      "metaSortKey": 500,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"course_id\": \"{{ _.course_id }}\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_06",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "06 Create Payment (salin external_ref)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/payments",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.token }}"
+      },
+      "metaSortKey": 600,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"invoice_id\": \"{{ _.invoice_id }}\",\n  \"method\": \"bank_transfer\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_07",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "07 Update Progress SEBELUM bayar (harapan 403)",
+      "method": "PATCH",
+      "url": "{{ _.base_url }}/enrollments/{{ _.enrollment_id }}/progress",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.token }}"
+      },
+      "metaSortKey": 700,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"module_id\": \"{{ _.module_id }}\",\n  \"status\": \"completed\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_08",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "08 Payment Callback (paid)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/payments/callback",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        },
+        {
+          "name": "X-Callback-Token",
+          "value": "rahasia-callback-gateway"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": 800,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"external_ref\": \"{{ _.external_ref }}\",\n  \"status\": \"paid\",\n  \"amount\": \"150000.00\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_09",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "09 My Courses (harapan status active)",
+      "method": "GET",
+      "url": "{{ _.base_url }}/enrollments/mycourses",
+      "headers": [],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.token }}"
+      },
+      "metaSortKey": 900
+    },
+    {
+      "_id": "req_sb_10",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "10 Update Progress SETELAH bayar (harapan 200)",
+      "method": "PATCH",
+      "url": "{{ _.base_url }}/enrollments/{{ _.enrollment_id }}/progress",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.token }}"
+      },
+      "metaSortKey": 1000,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"module_id\": \"{{ _.module_id }}\",\n  \"status\": \"completed\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_11",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "Extra: Auth Me",
+      "method": "GET",
+      "url": "{{ _.base_url }}/auth/me",
+      "headers": [],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.token }}"
+      },
+      "metaSortKey": 1100
+    },
+    {
+      "_id": "req_sb_12",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "Extra: Login Admin",
+      "method": "POST",
+      "url": "{{ _.base_url }}/auth/login",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": 1200,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"email\": \"admin@skillbridge.id\",\n  \"password\": \"Admin123!\"\n}"
+      }
+    },
+    {
+      "_id": "req_sb_13",
+      "_type": "request",
+      "parentId": "wrk_skillbridge",
+      "name": "Extra: Callback tanpa token (harapan 401)",
+      "method": "POST",
+      "url": "{{ _.base_url }}/payments/callback",
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": 1300,
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"external_ref\": \"{{ _.external_ref }}\",\n  \"status\": \"paid\",\n  \"amount\": \"150000.00\"\n}"
+      }
+    }
+  ]
+}
