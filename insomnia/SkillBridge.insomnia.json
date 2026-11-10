@@ -24,7 +24,8 @@
         "module_id": "",
         "enrollment_id": "",
         "invoice_id": "",
-        "external_ref": ""
+        "external_ref": "",
+        "callback_signature": ""
       }
     },
     {
@@ -162,7 +163,7 @@
       "_id": "req_sb_08",
       "_type": "request",
       "parentId": "wrk_skillbridge",
-      "name": "08 Payment Callback (paid)",
+      "name": "08 Payment Callback (signed, see README",
       "method": "POST",
       "url": "{{ _.base_url }}/payments/callback",
       "headers": [
@@ -171,8 +172,8 @@
           "value": "application/json"
         },
         {
-          "name": "X-Callback-Token",
-          "value": "rahasia-callback-gateway"
+          "name": "X-Callback-Signature",
+          "value": "{{ _.callback_signature }}"
         }
       ],
       "authentication": {},
