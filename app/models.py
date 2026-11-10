@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -89,6 +89,9 @@ class Invoice(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     status: Mapped[str] = mapped_column(String(20), default="unpaid")
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: utcnow() + timedelta(hours=24)
+    )
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
