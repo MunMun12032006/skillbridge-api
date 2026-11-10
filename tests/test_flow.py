@@ -41,7 +41,11 @@ def student():
 def course():
     r = client.get("/courses")
     assert r.status_code == 200
-    cid = r.json()["data"][0]["id"]
+    cid = next(
+        item["id"]
+        for item in r.json()["data"]
+        if item["title"] == "REST API dengan FastAPI"
+    )
     detail = client.get(f"/courses/{cid}").json()["data"]
     assert len(detail["modules"]) == 4
     return detail
