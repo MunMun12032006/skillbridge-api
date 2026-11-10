@@ -1,0 +1,46 @@
+name: SkillBridge tests
+
+on:
+  push:
+    branches:
+      - meet7-latihan-mandiri-20261110
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: skillbridge
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: skillbridge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skillbridge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: skillbridge
+      DB_USER: skillbridge
+      DB_PASSWORD: secret
+      JWT_SECRET: testing-only-long-secret-that-is-at-least-32-characters
+      PAYMENT_CALLBACK_SECRET: testing-signature-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Create tables and seed
+        run: |
+          python -m app.create_tables
+          python -m app.seed
+      - name: Run pytest
+        run: python -m pytest -v
