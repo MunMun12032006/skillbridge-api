@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.deps import authorize_role
-from app.models import Category, Course, User
-from app.schemas import ApiResponse, CourseCreateIn, CourseDetailOut, CourseOut, ok
+from app.models import Category, Course, CourseModule, User
+from app.schemas import ApiResponse, CourseCreateIn, CourseDetailOut, CourseOut, ModuleOut, ok
 
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
@@ -40,6 +40,25 @@ def get_course(course_id: uuid.UUID, db: Session = Depends(get_db)):
         raise HTTPException(404, "Kursus tidak ditemukan")
     return ok(course)
 
+@router.get("/{course_id}/modules", response_model=ApiResponse[list[ModuleOut]])
+def list_course_modules(
+    course_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    course = db.get(Course, course_id)
+
+    if course is None or not course.is_published:
+        raise HTTPException(404, "Kursus tidak ditemukan")
+
+    stmt = (
+        select(CourseModule)
+        .where(CourseModule.course_id == course_id)
+        .order_by(CourseModule.position.asc())
+    )
+
+    modules = db.scalars(stmt).all()
+
+    return ok(modules)
 
 @router.post("", status_code=201, response_model=ApiResponse[CourseOut])
 def create_course(
