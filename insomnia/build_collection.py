@@ -20,7 +20,8 @@ def req(i, name, method, path, body=None, headers=None, auth=False):
     return r
 
 
-cb = [{"name": "X-Callback-Token", "value": "rahasia-callback-gateway"}]
+# Signature is calculated using scripts/sign_callback.py from the exact raw body.
+cb = [{"name": "X-Callback-Signature", "value": "{{ _.callback_signature }}"}]
 reqs = [
     req(1, "01 Register", "POST", "/auth/register",
         {"full_name": "Budi Santoso", "email": "budi@mail.com", "password": "Rahasia123"}),
@@ -35,7 +36,7 @@ reqs = [
     req(7, "07 Update Progress SEBELUM bayar (harapan 403)", "PATCH",
         "/enrollments/{{ _.enrollment_id }}/progress",
         {"module_id": "{{ _.module_id }}", "status": "completed"}, auth=True),
-    req(8, "08 Payment Callback (paid)", "POST", "/payments/callback",
+    req(8, "08 Payment Callback (signed, see README)", "POST", "/payments/callback",
         {"external_ref": "{{ _.external_ref }}", "status": "paid", "amount": "150000.00"}, headers=cb),
     req(9, "09 My Courses (harapan status active)", "GET", "/enrollments/mycourses", auth=True),
     req(10, "10 Update Progress SETELAH bayar (harapan 200)", "PATCH",
@@ -53,7 +54,8 @@ resources = [
      "description": "Koleksi praktikum SkillBridge (FastAPI)", "scope": "collection"},
     {"_id": "env_sb_base", "_type": "environment", "parentId": WRK, "name": "Base Environment",
      "data": {"base_url": "http://localhost:8000", "token": "", "course_id": "",
-              "module_id": "", "enrollment_id": "", "invoice_id": "", "external_ref": ""}},
+              "module_id": "", "enrollment_id": "", "invoice_id": "", "external_ref": "",
+              "callback_signature": ""}},
     *reqs,
 ]
 out = {"_type": "export", "__export_format": 4, "__export_date": "2026-10-23T00:00:00.000Z",
