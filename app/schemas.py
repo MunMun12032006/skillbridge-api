@@ -62,6 +62,12 @@ class CourseCreateIn(BaseModel):
     description: str = ""
     price: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
 
+class CourseUpdateIn(BaseModel):
+    category_id: uuid.UUID | None = None
+    title: str | None = Field(default=None, min_length=3, max_length=150)
+    description: str | None = None
+    price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+    is_published: bool | None = None
 
 class ModuleOut(ORMModel):
     id: uuid.UUID

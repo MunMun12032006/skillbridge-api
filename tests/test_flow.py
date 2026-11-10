@@ -3,17 +3,49 @@
 Prasyarat: tabel sudah dibuat dan seed sudah dijalankan.
 Jalankan  : pytest -v
 """
-import uuid
+from datetime import datetime, timedelta, timezone
 
+from app.database import SessionLocal
+from app.models import Enrollment, Invoice, Order, Payment
+
+import hashlib
+import hmac
+import json
+import uuid
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.main import app
 
-client = TestClient(app)
-CALLBACK = {"X-Callback-Token": settings.payment_callback_secret}
 
+client = TestClient(app)
+
+
+def signed_callback(payload: dict):
+    # Ubah data menjadi JSON bytes
+    raw_body = json.dumps(
+        payload,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    # Hitung signature HMAC-SHA256
+    signature = hmac.new(
+        settings.payment_callback_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    # Kirim raw JSON dengan signature yang cocok
+    return client.post(
+        "/payments/callback",
+        content=raw_body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Callback-Signature": signature,
+        },
+    )
 
 def auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -39,9 +71,16 @@ def student():
 
 @pytest.fixture(scope="module")
 def course():
-    r = client.get("/courses")
+    r = client.get(
+        "/courses",
+        params={"q": "REST API dengan FastAPI"},
+    )
     assert r.status_code == 200
-    cid = r.json()["data"][0]["id"]
+    cid = next(
+        item["id"]
+        for item in r.json()["data"]
+        if item["title"] == "REST API dengan FastAPI"
+    )
     detail = client.get(f"/courses/{cid}").json()["data"]
     assert len(detail["modules"]) == 4
     return detail
@@ -126,22 +165,43 @@ def test_full_purchase_flow(student, course):
     pay = r.json()["data"]
     assert client.post("/payments", json={"invoice_id": invoice_id, "method": "qris"}, headers=h).status_code == 409
 
-    # callback: token salah / tanpa token / nominal salah
-    cb = {"external_ref": pay["external_ref"], "status": "paid", "amount": pay["amount"]}
-    assert client.post("/payments/callback", json=cb).status_code == 401
-    assert client.post("/payments/callback", json=cb, headers={"X-Callback-Token": "x"}).status_code == 401
+
+    # Callback tanpa signature harus ditolak
+    cb = {
+        "external_ref": pay["external_ref"],
+        "status": "paid",
+        "amount": pay["amount"],
+    }
+
+    assert client.post(
+        "/payments/callback",
+        json=cb,
+    ).status_code == 401
+
+    # Signature yang salah harus ditolak
+    assert client.post(
+        "/payments/callback",
+        json=cb,
+        headers={"X-Callback-Signature": "signature-salah"},
+    ).status_code == 401
+
+    # Nominal salah dengan signature valid harus ditolak
     bad = {**cb, "amount": "1.00"}
-    assert client.post("/payments/callback", json=bad, headers=CALLBACK).status_code == 422
+    assert signed_callback(bad).status_code == 422
+
+    # Enrollment belum aktif sebelum pembayaran berhasil
     my = client.get("/enrollments/mycourses", headers=h).json()["data"]
-    assert my[0]["status"] == "pending_payment"  # belum berubah
+    assert my[0]["status"] == "pending_payment"
 
-    # callback paid
-    r = client.post("/payments/callback", json=cb, headers=CALLBACK)
-    assert r.status_code == 200 and r.json()["data"]["status"] == "paid"
+    # Callback dengan signature valid: pembayaran berhasil
+    r = signed_callback(cb)
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "paid"
 
-    # idempotent
-    r = client.post("/payments/callback", json=cb, headers=CALLBACK)
-    assert r.status_code == 200 and "sudah pernah" in r.json()["message"]
+    # Idempotency: callback yang sama tidak diproses dua kali
+    r = signed_callback(cb)
+    assert r.status_code == 200
+    assert "sudah pernah" in r.json()["message"]
 
     my = client.get("/enrollments/mycourses", headers=h).json()["data"]
     assert my[0]["status"] == "active" and my[0]["total_modules"] == 4
@@ -180,11 +240,394 @@ def test_failed_payment_allows_retry(student):
     d = client.post("/enrollments", json={"course_id": new["id"]}, headers=h).json()["data"]
     inv = d["invoice"]["id"]
     p1 = client.post("/payments", json={"invoice_id": inv, "method": "ewallet"}, headers=h).json()["data"]
-    r = client.post(
-        "/payments/callback",
-        json={"external_ref": p1["external_ref"], "status": "failed", "amount": p1["amount"]},
-        headers=CALLBACK,
-    )
+    r = signed_callback({
+        "external_ref": p1["external_ref"],
+        "status": "failed",
+        "amount": p1["amount"],
+    })
     assert r.status_code == 200 and r.json()["data"]["status"] == "failed"
     r = client.post("/payments", json={"invoice_id": inv, "method": "ewallet"}, headers=h)
     assert r.status_code == 201  # boleh coba bayar lagi
+
+def test_callback_rejects_tampered_body():
+    # Buat JSON callback pengujian
+    original = json.dumps(
+        {
+            "external_ref": f"SB-TEST-{uuid.uuid4().hex}",
+            "status": "paid",
+            "amount": 50000,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    # Buat signature dari JSON asli
+    signature = hmac.new(
+        settings.payment_callback_secret.encode("utf-8"),
+        original,
+        hashlib.sha256,
+    ).hexdigest()
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Callback-Signature": signature,
+    }
+
+    # Signature valid, tetapi payment sengaja tidak ada
+    r = client.post(
+        "/payments/callback",
+        content=original,
+        headers=headers,
+    )
+    assert r.status_code == 404
+
+    # Manipulasi nominal setelah signature dibuat
+    tampered = original.replace(
+        b'"amount":50000',
+        b'"amount":50001',
+    )
+    assert tampered != original
+
+    # Signature lama tidak cocok dengan JSON yang diubah
+    r = client.post(
+        "/payments/callback",
+        content=tampered,
+        headers=headers,
+    )
+    assert r.status_code == 401
+
+def test_course_modules_endpoint(course):
+    course_id = course["id"]
+
+    # 1. Mengambil daftar modul kursus
+    r = client.get(f"/courses/{course_id}/modules")
+
+    assert r.status_code == 200, r.text
+
+    modules = r.json()["data"]
+
+    # 2. Memastikan jumlah modul ada 4
+    assert len(modules) == 4
+
+    # 3. Memastikan urutan posisi modul benar
+    positions = [m["position"] for m in modules]
+    assert positions == [1, 2, 3, 4]
+
+    # 4. Kursus yang tidak ditemukan harus menghasilkan 404
+    invalid_id = uuid.uuid4()
+
+    r = client.get(f"/courses/{invalid_id}/modules")
+    assert r.status_code == 404
+
+def test_payment_detail_access(student, course):
+    # 1. Login sebagai instructor
+    instructor = login(
+        "instructor@skillbridge.id",
+        "Instruktur123!",
+    )
+
+    # 2. Buat kursus khusus pengujian
+    r = client.post(
+        "/courses",
+        json={
+            "category_id": course["category_id"],
+            "title": f"Payment Detail {uuid.uuid4().hex[:6]}",
+            "price": "25000.00",
+        },
+        headers=auth(instructor),
+    )
+    assert r.status_code == 201, r.text
+    course_id = r.json()["data"]["id"]
+
+    # 3. Student membuat enrollment
+    r = client.post(
+        "/enrollments",
+        json={"course_id": course_id},
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 201, r.text
+    invoice_id = r.json()["data"]["invoice"]["id"]
+
+    # 4. Student membuat pembayaran
+    r = client.post(
+        "/payments",
+        json={
+            "invoice_id": invoice_id,
+            "method": "bank_transfer",
+        },
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 201, r.text
+    payment_id = r.json()["data"]["id"]
+
+    # 5. Pemilik pembayaran boleh melihat datanya
+    r = client.get(
+        f"/payments/{payment_id}",
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["id"] == payment_id
+    assert r.json()["data"]["status"] == "pending"
+
+    # 6. Buat akun student kedua
+    email = f"student-lain-{uuid.uuid4().hex[:6]}@mail.com"
+
+    r = client.post(
+        "/auth/register",
+        json={
+            "full_name": "Student Lain",
+            "email": email,
+            "password": "Rahasia123",
+        },
+    )
+    assert r.status_code == 201
+    other_token = login(email, "Rahasia123")
+
+    # 7. Student lain tidak boleh melihat pembayaran
+    r = client.get(
+        f"/payments/{payment_id}",
+        headers=auth(other_token),
+    )
+    assert r.status_code == 404
+
+    # 8. Tanpa login harus ditolak
+    r = client.get(f"/payments/{payment_id}")
+    assert r.status_code == 401
+
+    # 9. Payment ID yang tidak ada harus menghasilkan 404
+    r = client.get(
+        f"/payments/{uuid.uuid4()}",
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 404
+
+def test_patch_course_permissions(student, course):
+    # 1. Login instructor dan admin
+    instructor = login(
+        "instructor@skillbridge.id",
+        "Instruktur123!",
+    )
+    admin = login(
+        "admin@skillbridge.id",
+        "Admin123!",
+    )
+
+    # 2. Instructor membuat kursus baru
+    r = client.post(
+        "/courses",
+        json={
+            "category_id": course["category_id"],
+            "title": f"PATCH Test {uuid.uuid4().hex[:6]}",
+            "price": "120000.00",
+        },
+        headers=auth(instructor),
+    )
+    assert r.status_code == 201, r.text
+
+    course_id = r.json()["data"]["id"]
+
+    # 3. Instructor pemilik boleh mengedit kursus
+    r = client.patch(
+        f"/courses/{course_id}",
+        json={"description": "Diubah oleh instructor"},
+        headers=auth(instructor),
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["description"] == "Diubah oleh instructor"
+
+    # 4. Student tidak boleh mengedit kursus
+    r = client.patch(
+        f"/courses/{course_id}",
+        json={"price": "130000.00"},
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 403
+
+    # 5. Admin boleh mengedit kursus instructor
+    r = client.patch(
+        f"/courses/{course_id}",
+        json={"description": "Diubah oleh admin"},
+        headers=auth(admin),
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["description"] == "Diubah oleh admin"
+
+    # 6. Admin membuat kursus lain
+    r = client.post(
+        "/courses",
+        json={
+            "category_id": course["category_id"],
+            "title": f"Admin Course {uuid.uuid4().hex[:6]}",
+            "price": "50000.00",
+        },
+        headers=auth(admin),
+    )
+    assert r.status_code == 201, r.text
+
+    admin_course_id = r.json()["data"]["id"]
+
+    # 7. Instructor tidak boleh mengedit kursus
+    # yang bukan miliknya
+    r = client.patch(
+        f"/courses/{admin_course_id}",
+        json={"description": "Percobaan edit tanpa izin"},
+        headers=auth(instructor),
+    )
+    assert r.status_code == 403
+
+    # 8. Kursus yang tidak ada harus menghasilkan 404
+    r = client.patch(
+        f"/courses/{uuid.uuid4()}",
+        json={"title": "Kursus Tidak Ada"},
+        headers=auth(instructor),
+    )
+    assert r.status_code == 404
+
+def test_invoice_expires_after_24_hours(student, course):
+    # 1. Login instructor
+    instructor = login(
+        "instructor@skillbridge.id",
+        "Instruktur123!",
+    )
+
+    # 2. Buat kursus khusus pengujian
+    r = client.post(
+        "/courses",
+        json={
+            "category_id": course["category_id"],
+            "title": f"Invoice Expiry {uuid.uuid4().hex[:6]}",
+            "price": "50000.00",
+        },
+        headers=auth(instructor),
+    )
+    assert r.status_code == 201, r.text
+    course_id = r.json()["data"]["id"]
+
+    # 3. Student membuat enrollment
+    r = client.post(
+        "/enrollments",
+        json={"course_id": course_id},
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 201, r.text
+
+    data = r.json()["data"]
+    invoice_id = uuid.UUID(data["invoice"]["id"])
+    order_id = uuid.UUID(data["order"]["id"])
+
+    assert data["invoice"]["status"] == "unpaid"
+    assert data["order"]["status"] == "pending"
+
+    # 4. Simulasikan invoice berumur 25 jam
+    with SessionLocal() as db:
+        invoice = db.get(Invoice, invoice_id)
+        assert invoice is not None
+
+        invoice.issued_at = (
+            datetime.now(timezone.utc) - timedelta(hours=25)
+        )
+        db.commit()
+
+    # 5. Coba bayar invoice yang sudah kedaluwarsa
+    r = client.post(
+        "/payments",
+        json={
+            "invoice_id": str(invoice_id),
+            "method": "bank_transfer",
+        },
+        headers=auth(student["token"]),
+    )
+
+    # 6. Pembayaran harus ditolak
+    assert r.status_code == 409, r.text
+    assert "kedaluwarsa" in r.json()["message"].lower()
+
+    # 7. Periksa status di database
+    with SessionLocal() as db:
+        invoice = db.get(Invoice, invoice_id)
+        order = db.get(Order, order_id)
+
+        assert invoice.status == "void"
+        assert order.status == "cancelled"
+
+def test_expired_invoice_rejects_payment_callback(student, course):
+    # 1. Login instructor
+    instructor = login(
+        "instructor@skillbridge.id",
+        "Instruktur123!",
+    )
+
+    # 2. Buat kursus khusus pengujian
+    r = client.post(
+        "/courses",
+        json={
+            "category_id": course["category_id"],
+            "title": f"Expired Callback {uuid.uuid4().hex[:6]}",
+            "price": "50000.00",
+        },
+        headers=auth(instructor),
+    )
+    assert r.status_code == 201, r.text
+    course_id = r.json()["data"]["id"]
+
+    # 3. Student membuat enrollment
+    r = client.post(
+        "/enrollments",
+        json={"course_id": course_id},
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 201, r.text
+
+    data = r.json()["data"]
+    enrollment_id = uuid.UUID(data["enrollment"]["id"])
+    invoice_id = uuid.UUID(data["invoice"]["id"])
+    order_id = uuid.UUID(data["order"]["id"])
+
+    # 4. Buat payment saat invoice masih aktif
+    r = client.post(
+        "/payments",
+        json={
+            "invoice_id": str(invoice_id),
+            "method": "bank_transfer",
+        },
+        headers=auth(student["token"]),
+    )
+    assert r.status_code == 201, r.text
+
+    payment_data = r.json()["data"]
+    payment_id = uuid.UUID(payment_data["id"])
+
+    assert payment_data["status"] == "pending"
+
+    # 5. Simulasikan invoice berumur 25 jam
+    with SessionLocal() as db:
+        invoice = db.get(Invoice, invoice_id)
+        invoice.issued_at = (
+            datetime.now(timezone.utc) - timedelta(hours=25)
+        )
+        db.commit()
+
+    # 6. Kirim callback dengan signature HMAC valid
+    callback = {
+        "external_ref": payment_data["external_ref"],
+        "status": "paid",
+        "amount": payment_data["amount"],
+    }
+
+    r = signed_callback(callback)
+
+    # 7. Callback harus ditolak karena kedaluwarsa
+    assert r.status_code == 409, r.text
+    assert "kedaluwarsa" in r.json()["message"].lower()
+
+    # 8. Pastikan status database benar
+    with SessionLocal() as db:
+        invoice = db.get(Invoice, invoice_id)
+        order = db.get(Order, order_id)
+        payment = db.get(Payment, payment_id)
+        enrollment = db.get(Enrollment, enrollment_id)
+
+        assert invoice.status == "void"
+        assert order.status == "cancelled"
+        assert payment.status == "failed"
+        assert enrollment.status == "pending_payment"
+
