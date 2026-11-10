@@ -1,8 +1,9 @@
 import hmac
 import uuid
 from datetime import datetime, timezone
+from hashlib import sha256
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,17 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
+
+
+def valid_signature(raw_body: bytes, supplied: str | None) -> bool:
+    """HMAC-SHA256 atas raw body, format header: sha256=<hex>."""
+    if not supplied or not supplied.startswith("sha256="):
+        return False
+    calculated = hmac.new(
+        settings.payment_callback_secret.encode("utf-8"), raw_body, sha256
+    ).hexdigest()
+    return hmac.compare_digest(calculated, supplied[7:])
+
 
 
 @router.post("", status_code=201, response_model=ApiResponse[PaymentOut])
@@ -47,17 +59,34 @@ def create_payment(
     return ok(payment, "Pembayaran dibuat, menunggu konfirmasi gateway")
 
 
+@router.get("/{payment_id}", response_model=ApiResponse[PaymentOut])
+def get_payment(
+    payment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(authorize_role("student")),
+):
+    """Latihan 2: pemilik pembayaran saja yang boleh melihat statusnya."""
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise HTTPException(404, "Pembayaran tidak ditemukan")
+    invoice = db.get(Invoice, payment.invoice_id)
+    order = db.get(Order, invoice.order_id) if invoice else None
+    if order is None or order.student_id != user.id:
+        raise HTTPException(404, "Pembayaran tidak ditemukan")
+    return ok(payment)
+
+
 @router.post("/callback", response_model=ApiResponse[PaymentOut])
-def payment_callback(
+async def payment_callback(
     body: PaymentCallbackIn,
-    x_callback_token: str | None = Header(default=None),
+    request: Request,
+    x_callback_signature: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    # 1) Validasi secret: tanpa ini siapa pun bisa "melunasi" invoice sendiri
-    if not x_callback_token or not hmac.compare_digest(
-        x_callback_token.encode(), settings.payment_callback_secret.encode()
-    ):
-        raise HTTPException(401, "Callback token tidak valid")
+    raw_body = await request.body()
+    # 1) Signature divalidasi atas raw bytes body, bukan hasil parse JSON.
+    if not valid_signature(raw_body, x_callback_signature):
+        raise HTTPException(401, "Signature callback tidak valid")
 
     # 2) Kunci baris payment agar callback ganda tidak balapan
     payment = db.scalar(
@@ -79,8 +108,18 @@ def payment_callback(
         db.commit()
         return ok(payment, "Pembayaran ditandai gagal")
 
-    # 5) PAID: update payment, invoice, order, enrollment secara konsisten (1 transaksi)
+    # 5) Menolak pembayaran masuk setelah tanggal kedaluwarsa invoice.
+    # Lakukan sebelum perubahan status agar data tetap pending.
+    invoice = db.get(Invoice, payment.invoice_id)
     now = datetime.now(timezone.utc)
+    if invoice.expired_at is not None:
+        expires_at = invoice.expired_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at:
+            raise HTTPException(409, "Invoice sudah kedaluwarsa")
+
+    # 6) PAID: update payment, invoice, order, enrollment secara konsisten (1 transaksi)
     payment.status = "paid"
     payment.paid_at = now
 
