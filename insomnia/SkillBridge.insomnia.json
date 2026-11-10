@@ -163,7 +163,7 @@
       "_id": "req_sb_08",
       "_type": "request",
       "parentId": "wrk_skillbridge",
-      "name": "08 Payment Callback (signed, see README",
+      "name": "08 Payment Callback (signed, see README)",
       "method": "POST",
       "url": "{{ _.base_url }}/payments/callback",
       "headers": [
