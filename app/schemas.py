@@ -63,6 +63,12 @@ class CourseCreateIn(BaseModel):
     price: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
 
 
+class CourseUpdateIn(BaseModel):
+    title: str | None = Field(default=None, min_length=3, max_length=150)
+    description: str | None = None
+    price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
+
+
 class ModuleOut(ORMModel):
     id: uuid.UUID
     title: str
@@ -107,6 +113,7 @@ class InvoiceOut(ORMModel):
     invoice_number: str
     amount: Decimal
     status: str
+    expired_at: datetime
 
 
 class EnrollmentCreatedOut(BaseModel):
